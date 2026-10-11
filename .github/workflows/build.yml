@@ -1,0 +1,87 @@
+name: Build LocalSend Old APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out LocalSend v1.15.4 and its Flutter submodule
+        run: git clone --depth 1 --recurse-submodules --branch v1.15.4 https://github.com/localsend/localsend.git source
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages and accept licences
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Give the APK a separate package ID and label
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          gradle = Path("source/app/android/app/build.gradle")
+          content = gradle.read_text(encoding="utf-8")
+          content, count = re.subn(
+              r'applicationId\s+"org\.localsend\.localsend_app"',
+              'applicationId "org.localsend.localsend_old"',
+              content,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Could not find the expected applicationId in build.gradle")
+          content, suffix_count = re.subn(
+              r'^\s*applicationIdSuffix\s+"\.debug"\s*$',
+              '',
+              content,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if suffix_count != 1:
+              raise SystemExit("Could not find the expected debug applicationIdSuffix")
+          gradle.write_text(content, encoding="utf-8")
+
+          manifest = Path("source/app/android/app/src/main/AndroidManifest.xml")
+          content = manifest.read_text(encoding="utf-8")
+          content, label_count = re.subn(
+              r'android:label="LocalSend"',
+              'android:label="LocalSend Old"',
+              content,
+              count=1,
+          )
+          if label_count != 1:
+              raise SystemExit("Could not find the expected app label in AndroidManifest.xml")
+          manifest.write_text(content, encoding="utf-8")
+          PY
+
+      - name: Fetch Flutter dependencies
+        working-directory: source/app
+        run: ../submodules/flutter/bin/flutter pub get
+
+      - name: Build APK
+        working-directory: source/app
+        run: ../submodules/flutter/bin/flutter build apk --debug
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalSend-Old-v1.15.4-Android
+          path: source/app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
